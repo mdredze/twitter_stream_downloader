@@ -1,0 +1,3 @@
+ujson
+requests == 2.7
+tweepy 
