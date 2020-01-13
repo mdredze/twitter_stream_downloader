@@ -1,6 +1,9 @@
 twitter_stream_downloader
 =========================
 
+This tutorial provides an excellent introduction to collection Twitter data. It's more recent than updates to this library:
+http://socialmedia-class.org/twittertutorial.html
+
 A simple Python script to download tweets from the Twitter streaming API. Works with API version 1.1.
 
 The script to run is python/streaming_downloader.py.
