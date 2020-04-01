@@ -1,20 +1,19 @@
 '''
-Copyright 2013 Mark Dredze. All rights reserved.
+Copyright 2020 Mark Dredze. All rights reserved.
 This software is released under the 2-clause BSD license.
 Mark Dredze, mdredze@cs.jhu.edu
 '''
-from tweepy.streaming import StreamListener
-from tweepy import OAuthHandler
-from tweepy import Stream
 from time import gmtime, strftime, localtime
-from httplib import IncompleteRead
+import http
 import gzip, logging, datetime
 import time
-
 import os
-from utils import parseCommandLine, usage
+import argparse
 
-class FileListener(StreamListener):
+import tweepy
+
+
+class FileListener(tweepy.streaming.StreamListener):
 	def __init__(self, path, restart_time):
 		self.path = path
 		self.current_file = None
@@ -34,7 +33,7 @@ class FileListener(StreamListener):
 				self.current_file.write('\n')
 
 	def on_error(self, status):
-		logger.error(status)
+		logging.error(status)
 
 	def startFile(self):
 		if self.current_file:
@@ -49,105 +48,93 @@ class FileListener(StreamListener):
 		full_path = os.path.join(full_path, month)
 		try:
 			os.makedirs(full_path)
-			logger.info('Created %s' % full_path)
+			logging.info('Created %s' % full_path)
 		except:
 			pass
 		filename = os.path.join(full_path, '%s.gz' % datetime)
 		self.current_file = gzip.open(filename, 'w')
 		self.file_start_time = time.time()
-		logger.info('Starting new file: %s' % filename)
+		logging.info('Starting new file: %s' % filename)
 
-def loadStreamFile(stream_filename, stream_type):
-	with open(stream_filename, 'r') as file:
-		lines = file.readlines()
-	
-	content = '\n'.join(lines)
+
+def load_stream_parameters(parameters_filename, stream_type):
+	with open(parameters_filename, 'r') as input:
+		content = '\n'.join(input.readlines())
+
 	index = content.find('=')
 	if index != -1:
 		content = content[index+1:]
-	return_val = content.split(',')
+	return_value = content.split(',')
 	
 	if stream_type.lower() == 'location':
-		for ii in range(len(return_val)):
-			return_val[ii] = float(return_val[ii])
+		for ii, entry in enumerate(return_value):
+			return_value[ii] = float(entry)
 	
-	return return_val
-		
-if __name__ == '__main__':
-	options = [
-				['consumer_key=', 'The consumer key.', True, None],
-				['consumer_secret=', 'The consumer key secret.', True, None],
-				['access_token=', 'The access token.', True, None],
-				['access_token_secret=', 'The access token secret.', True, None],
-				
-				['stream_type=', 'The type of stream to run: sample, location, keyword.', True, None],
-				['output_directory=', 'Where to save output files.', True, None],
-				['stream_filename=', 'The name of the file containing parameters for this stream. Required for location and keyword.', False, ''],
-				['pid_file=', 'Save the pid of this job to the given file.', False, None],
-				['log_filename=', 'The log file.', True, None],
-				]
-	# Start main method here.
-		
-	command_line = '%s'
-	options_hash, remainder = parseCommandLine(options, command_line=command_line)
-	
-	if (len(remainder) != 0):
-		print usage(sys.argv, command_line, options)
-		sys.exit()		
-			
-	consumer_key = options_hash['consumer_key']
-	consumer_secret = options_hash['consumer_secret']
-	access_token = options_hash['access_token']
-	access_token_secret = options_hash['access_token_secret']
-	
-	output_directory = options_hash['output_directory']
-	
-	stream_type = options_hash['stream_type']
-	stream_filename = options_hash.setdefault('stream_filename', None)
-	
-	log_filename = options_hash['log_filename']
-	logger = logging.getLogger('tweepy_streaming')
-	handler = logging.FileHandler(log_filename, mode='a')
-	formatter = logging.Formatter(fmt='%(asctime)s %(levelname)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
-	handler.setFormatter(formatter)
-	logger.addHandler(handler)
-	logger.setLevel(logging.INFO)
+	return return_value
 
 
-	if stream_type.lower() == 'location' or stream_type.lower() == 'keyword':
-		stream_args = loadStreamFile(stream_filename, stream_type)
-		
-	if 'pid_file' in options_hash:
-		pid_file = options_hash['pid_file']
-		file = open(pid_file, 'w')
-		file.write(str(os.getpid()))
-		file.close()
-	
-	listener = FileListener(output_directory, 86400)
-	auth = OAuthHandler(consumer_key, consumer_secret)
-	auth.set_access_token(access_token, access_token_secret)
+def main():
+	parser = argparse.ArgumentParser(description='Download streaming data from Twitter.')
+	parser.add_argument('--consumer-key', required=True, help='the consumer key')
+	parser.add_argument('--consumer-secret', required=True, help='the consumer key secret')
+	parser.add_argument('--access-token', required=True, help='the access token')
+	parser.add_argument('--access-token-secret', required=True, help='the access token secret')
+	parser.add_argument('--stream-type', choices=['sample', 'location', 'keyword'], required=True,
+						help='the type of stream to run')
+	parser.add_argument('--output-directory', required=True, help='where to save the output files')
+	parser.add_argument('--parameters-filename', required=False,
+						help='file containing parameters for the stream (required for location and keyword.)')
+	parser.add_argument('--pid-file', required=False, help='filename to store the process id')
+	parser.add_argument('--log', required=False, help='log filename (default: write to console)')
+	parser.add_argument('--log-level', required=False, default='INFO', choices=['CRITICAL', 'DEBUG', 'ERROR', 'FATAL', 'INFO', 'WARNING'], help='log filename (default: write to console)')
 
-	
-	
+	args = parser.parse_args()
+
+	# Setup the logger
+	log_level = getattr(logging, args.loglevel.upper())
+	log_format = '%(asctime)s %(levelname)s %(message)s'
+	log_date_format = '%m/%d/%Y %I:%M:%S %p'
+
+	if args.log:
+		# Setup the logger to a file if one is provided
+		logging.basicConfig(filename=args.log, level=log_level, format=log_format, datefmt=log_date_format)
+	else:
+		logging.basicConfig(level=log_level, format=log_format, datefmt=log_date_format)
+
+	# Get the stream arguments
+	if args.stream_type == 'location' or args.stream_type == 'keyword':
+		if not args.parameters_filename:
+			raise ValueError('--parameters-filename is requires when the stream is of type "location" or "keyword"')
+		stream_parameters= load_stream_parameters(args.parameters_filename, args.stream_type)
+
+	if args.pid_file:
+		with open(args.pid_file, 'w') as writer:
+			writer.write(str(os.getpid()))
+
+	restart_time = 86400
+	listener = FileListener(args.output_directory, restart_time)
+	auth = tweepy.OAuthHandler(args.consumer_key, args.consumer_secret)
+	auth.set_access_token(args.access_token, args.access_token_secret)
+
+
 	try:
 		while True:
 			try:
-				logger.warning("Connecting")
-				stream = Stream(auth, listener)
-				if stream_type.lower() == 'location':
-					stream.filter(locations=stream_args)
-				elif stream_type.lower() == 'keyword':
-					stream.filter(track=stream_args)
-				elif stream_type.lower() == 'sample':
-					stream.sample()
+				logging.info('Connecting to the stream of type {}'.format(args.stream_type))
+				stream = tweepy.Stream(auth, listener)
+
+				if args.stream_type == 'location':
+					stream.filter(locations=stream_parameters)
+				elif args.stream_type == 'keyword':
+					stream.filter(track=stream_parameters)
 				else:
-					logger.error('Unknow stream type: ', twitterStream)
-					break
-			except IncompleteRead, e:
-				logger.error('Exception: ' + str(e))
-	except Exception, e:
-		logger.error('Exception: ' + str(e))
-	logger.info('Exiting.')
+					stream.sample()
+			except http.client.IncompleteRead as e:
+				logging.error('Exception: ' + str(e))
+	except Exception as e:
+		logging.error('Exception: ' + str(e))
+	logging.info('Exiting.')
 
 
-	
+if __name__ == '__main__':
+	main()
