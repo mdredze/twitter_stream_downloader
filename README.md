@@ -1,4 +1,4 @@
-twitter_stream_downloader
+Twitter Stream Downloader
 =========================
 
 This tutorial provides an excellent introduction to collection Twitter data. It's more recent than updates to this library:
@@ -20,7 +20,7 @@ If you run the script with the --help flag it will show valid options.
 The code creates files as year/month/timestamp.gz at least once every 24
 hours. Changing this behavior isn't too hard but requires modifying the code.
 
-The code requires tweepy. I am using version 1.9.
+The code requires tweepy. I am using version 3.8.0.
 https://github.com/tweepy/tweepy
 
 The script also supports the flag "pid_file". This will create a file with the PID of the running job. This is useful if you want to create a cron job that watches the script to make sure it is still running.
@@ -33,5 +33,5 @@ track=keyword1,keyword2,keyword3 ...
 Location files are similar:
 locations=value1,value2,value3,value4
 
-These files are provided using the "stream_filename" argument.
+These files are provided using the "parameters-file" argument.
 
