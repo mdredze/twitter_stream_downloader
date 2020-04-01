@@ -13,13 +13,28 @@ import time
 import gzip
 
 
+class ParameterFileModifiedException(Exception):
+	pass
+
+
 class FileListener(tweepy.streaming.StreamListener):
-	def __init__(self, path, restart_time):
+	def __init__(self, path, restart_time, parameters_filename=None):
 		self.path = path
 		self.current_file = None
 		self.restart_time = restart_time
 		self.file_start_time = time.time()
 		self.file_start_date = datetime.datetime.now()
+		self.parameters_filename = parameters_filename
+		self.parameters_filename_last_modified_time = None
+
+		if self.parameters_filename:
+			self.reset_parameter_file_mtime()
+
+	def _check_parameters_file_modification(self):
+		if self.parameters_filename:
+			current_mtime = os.path.getmtime(self.parameters_filename)
+			if current_mtime != self.parameters_filename_last_modified_time:
+				raise ParameterFileModifiedException()
 
 	def _ensure_file(self):
 		# Should we start a new file?
@@ -42,6 +57,7 @@ class FileListener(tweepy.streaming.StreamListener):
 
 	def on_data(self, data):
 		self._ensure_file()
+		self._check_parameters_file_modification()
 
 		if data.startswith('{'):
 			self.current_file.write(data)
@@ -79,6 +95,9 @@ class FileListener(tweepy.streaming.StreamListener):
 			logging.info('Closing current file')
 			self.current_file.close()
 
+	def reset_parameter_file_mtime(self):
+		self.parameters_filename_last_modified_time = os.path.getmtime(self.parameters_filename)
+
 
 def load_stream_parameters(parameters_filename, stream_type):
 	with open(parameters_filename, 'r') as input:
@@ -110,6 +129,8 @@ def main():
 	parser.add_argument('--pid-file', required=False, help='filename to store the process id')
 	parser.add_argument('--log', help='log filename (default: write to console)')
 	parser.add_argument('--log-level', default='INFO', choices=['CRITICAL', 'DEBUG', 'ERROR', 'FATAL', 'INFO', 'WARNING'], help='log filename (default: write to console)')
+	parser.add_argument('--check-for-new-parameters', action='store_true',
+						help='checks the parameters file timestamp every minute for changes')
 
 	args = parser.parse_args()
 
@@ -135,7 +156,11 @@ def main():
 			writer.write(str(os.getpid()))
 
 	restart_time = 86400
-	listener = FileListener(args.output_directory, restart_time)
+	if args.check_for_new_parameters:
+		listener = FileListener(args.output_directory, restart_time, parameters_filename=args.parameters_filename)
+	else:
+		listener = FileListener(args.output_directory, restart_time)
+
 	auth = tweepy.OAuthHandler(args.consumer_key, args.consumer_secret)
 	auth.set_access_token(args.access_token, args.access_token_secret)
 
@@ -152,8 +177,14 @@ def main():
 				else:
 					stream.sample()
 			except http.client.IncompleteRead as e:
-				logging.error('Exception: ' + str(e))
+				logging.exception('Got IncompleteRead exception')
 				listener.close_file()
+			except ParameterFileModifiedException as e:
+				# The parameter file changed. Reaload the parameters and create a new stream.
+				logging.info('Parameters file has changed; reloading')
+				listener.close_file()
+				stream_parameters = load_stream_parameters(args.parameters_filename, args.stream_type)
+				listener.reset_parameter_file_mtime()
 
 	except Exception as e:
 		logging.exception('Got exception on main handler')
