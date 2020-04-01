@@ -2,13 +2,15 @@
 # This software is released under the 2-clause BSD license.
 # Mark Dredze <mdredze@cs.jhu.edu>
 
-
-import http
-import gzip, logging, datetime
-import time
-import os
-import argparse
 import tweepy
+
+import argparse
+import datetime
+import http
+import logging
+import os
+import time
+import gzip
 
 
 class FileListener(tweepy.streaming.StreamListener):
@@ -136,7 +138,6 @@ def main():
 	listener = FileListener(args.output_directory, restart_time)
 	auth = tweepy.OAuthHandler(args.consumer_key, args.consumer_secret)
 	auth.set_access_token(args.access_token, args.access_token_secret)
-
 
 	try:
 		while True:
