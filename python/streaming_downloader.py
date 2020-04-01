@@ -1,15 +1,13 @@
-'''
-Copyright 2020 Mark Dredze. All rights reserved.
-This software is released under the 2-clause BSD license.
-Mark Dredze, mdredze@cs.jhu.edu
-'''
-from time import gmtime, strftime, localtime
+# Copyright 2020 Mark Dredze. All rights reserved.
+# This software is released under the 2-clause BSD license.
+# Mark Dredze <mdredze@cs.jhu.edu>
+
+
 import http
 import gzip, logging, datetime
 import time
 import os
 import argparse
-
 import tweepy
 
 
@@ -20,13 +18,29 @@ class FileListener(tweepy.streaming.StreamListener):
 		self.restart_time = restart_time
 		self.file_start_time = time.time()
 		self.file_start_date = datetime.datetime.now()
-		
+
+	def _ensure_file(self):
+		# Should we start a new file?
+		start_new_file = False
+		if not self.current_file:
+			# There is no existing file
+			start_new_file = True
+		elif self.current_file.closed:
+			# The existing file is closed
+			start_new_file = True
+		elif time.time() - self.restart_time > self.file_start_time:
+			# The amount of time that has passed for a restart is due.
+			start_new_file = True
+		elif self.file_start_date.day != datetime.datetime.now().day:
+			# It is a new day
+			start_new_file = True
+
+		if start_new_file:
+			self._start_new_file()
+
 	def on_data(self, data):
-		current_time = datetime.datetime.now()
-		if self.current_file == None or time.time() - self.restart_time > self.file_start_time \
-				or self.file_start_date.day != current_time.day:
-			self.startFile()
-			self.file_start_date = datetime.datetime.now()
+		self._ensure_file()
+
 		if data.startswith('{'):
 			self.current_file.write(data)
 			if not data.endswith('\n'):
@@ -35,26 +49,33 @@ class FileListener(tweepy.streaming.StreamListener):
 	def on_error(self, status):
 		logging.error(status)
 
-	def startFile(self):
-		if self.current_file:
+	def _start_new_file(self):
+		if self.current_file and not self.current_file.closed:
 			self.current_file.close()
 		
-		local_time_obj = localtime()
-		datetime = strftime("%Y_%m_%d_%H_%M_%S", local_time_obj)
-		year = strftime("%Y", local_time_obj)
-		month = strftime("%m", local_time_obj)
+		local_time_obj = time.localtime()
+		current_datetime = time.strftime("%Y_%m_%d_%H_%M_%S", local_time_obj)
+		year = time.strftime("%Y", local_time_obj)
+		month = time.strftime("%m", local_time_obj)
 		
 		full_path = os.path.join(self.path, year)
 		full_path = os.path.join(full_path, month)
 		try:
 			os.makedirs(full_path)
 			logging.info('Created %s' % full_path)
-		except:
+		except FileExistsError:
 			pass
-		filename = os.path.join(full_path, '%s.gz' % datetime)
-		self.current_file = gzip.open(filename, 'w')
+
+		filename = os.path.join(full_path, '%s.gz' % current_datetime)
+		self.current_file = gzip.open(filename, 'wt')
 		self.file_start_time = time.time()
 		logging.info('Starting new file: %s' % filename)
+		self.file_start_date = datetime.datetime.now()
+
+	def close_file(self):
+		if self.current_file and not self.current_file.closed:
+			logging.info('Closing current file')
+			self.current_file.close()
 
 
 def load_stream_parameters(parameters_filename, stream_type):
@@ -85,13 +106,13 @@ def main():
 	parser.add_argument('--parameters-filename', required=False,
 						help='file containing parameters for the stream (required for location and keyword.)')
 	parser.add_argument('--pid-file', required=False, help='filename to store the process id')
-	parser.add_argument('--log', required=False, help='log filename (default: write to console)')
-	parser.add_argument('--log-level', required=False, default='INFO', choices=['CRITICAL', 'DEBUG', 'ERROR', 'FATAL', 'INFO', 'WARNING'], help='log filename (default: write to console)')
+	parser.add_argument('--log', help='log filename (default: write to console)')
+	parser.add_argument('--log-level', default='INFO', choices=['CRITICAL', 'DEBUG', 'ERROR', 'FATAL', 'INFO', 'WARNING'], help='log filename (default: write to console)')
 
 	args = parser.parse_args()
 
 	# Setup the logger
-	log_level = getattr(logging, args.loglevel.upper())
+	log_level = getattr(logging, args.log_level.upper())
 	log_format = '%(asctime)s %(levelname)s %(message)s'
 	log_date_format = '%m/%d/%Y %I:%M:%S %p'
 
@@ -105,7 +126,7 @@ def main():
 	if args.stream_type == 'location' or args.stream_type == 'keyword':
 		if not args.parameters_filename:
 			raise ValueError('--parameters-filename is requires when the stream is of type "location" or "keyword"')
-		stream_parameters= load_stream_parameters(args.parameters_filename, args.stream_type)
+		stream_parameters = load_stream_parameters(args.parameters_filename, args.stream_type)
 
 	if args.pid_file:
 		with open(args.pid_file, 'w') as writer:
@@ -121,7 +142,7 @@ def main():
 		while True:
 			try:
 				logging.info('Connecting to the stream of type {}'.format(args.stream_type))
-				stream = tweepy.Stream(auth, listener)
+				stream = tweepy.Stream(auth = auth, listener = listener)
 
 				if args.stream_type == 'location':
 					stream.filter(locations=stream_parameters)
@@ -131,8 +152,12 @@ def main():
 					stream.sample()
 			except http.client.IncompleteRead as e:
 				logging.error('Exception: ' + str(e))
+				listener.close_file()
+
 	except Exception as e:
-		logging.error('Exception: ' + str(e))
+		logging.exception('Got exception on main handler')
+
+	listener.close_file()
 	logging.info('Exiting.')
 
 

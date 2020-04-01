@@ -1,3 +1,2 @@
-ujson
 requests
 tweepy 
